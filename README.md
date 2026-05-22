@@ -12,7 +12,7 @@ It is designed to remove friction from daily Git usage by doing **the obvious, s
 
 When you run `gog`, it performs the following steps:
 
-1.  **Initialization**: (Optional) If run with `--start`, it initializes a local Git repo, creates a standard `.gitignore`, prompts to create a public/private GitHub repository via the `gh` CLI, and configures the remote origin automatically.
+1.  **Initialization**: (Optional) If run with `--start`, it initializes a local Git repo, optionally creates a standard `.gitignore` (prompted), prompts to create a public/private GitHub repository via the `gh` CLI, and configures the remote origin automatically.
 2.  **Environment Check**: Verifies you are inside a Git repository.
 3.  **State Check**: Ensures you are on a branch (not detached HEAD).
 4.  **Branch Protection**: Blocks direct commits to `main` / `master` unless bypassed (automatically bypassed during `--start`).
@@ -66,7 +66,7 @@ gog --start
 This command will seamlessly:
 
 1. Initialize a local Git repository if one does not already exist.
-2. Generate a robust, production-ready `.gitignore` covering common development environments (Node, Python, IDEs, logs, and local `.env` files).
+2. Prompt you to optionally generate a robust, production-ready `.gitignore` covering common development environments (Node, Python, IDEs, logs, and local `.env` files).
 3. Interactively prompt you for a GitHub repository name (auto-suggesting your current folder name with sanitized hyphens) and visibility (`Public` vs `Private`).
 4. Execute `gh repo create` behind the scenes to provision the remote repo, set up `origin`, override temporary initial branch protection, and execute the core staging/sync pipeline.
 

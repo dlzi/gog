@@ -6,6 +6,13 @@ This project follows **semantic versioning** and favors stability over feature g
 
 ---
 
+## [1.4.2] — 2026-05-22
+
+### Changed
+- **Optional `.gitignore` generation:** During `--start`, the script now prompts the user before creating a default `.gitignore`. Previously it was created automatically if absent. Defaults to yes if the prompt is skipped.
+
+---
+
 ## [1.4.1] — 2026-05-22
 
 ### Added

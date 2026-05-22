@@ -93,8 +93,11 @@ if [[ "$START" == true ]]; then
     git init
   fi
 
-  # 3. Create a smart default .gitignore if missing
+  # 3. Optionally create a smart default .gitignore if missing
   if [[ ! -f .gitignore ]]; then
+    printf "Create a default .gitignore? (Y/n): "
+    read -r CREATE_GITIGNORE
+    if [[ ! "$CREATE_GITIGNORE" =~ ^[Nn]$ ]]; then
     log "Creating default .gitignore..."
     cat <<EOF > .gitignore
 # Logs
@@ -130,6 +133,7 @@ out/
 .env.local
 .env.*.local
 EOF
+    fi  # end CREATE_GITIGNORE check
   fi
 
   # 4. Handle GitHub Remote creation
