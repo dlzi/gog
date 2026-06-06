@@ -9,7 +9,7 @@ export LC_ALL=C.UTF-8
 # =======================
 BLOCKED_BRANCHES=("main" "master")
 REMOTE_TIMEOUT=5
-VERSION="1.4.1"
+VERSION="1.4.3"
 
 # Exit codes
 EXIT_NO_COMMIT=10
@@ -28,11 +28,27 @@ SKIP_PROTECTION=false
 SCAFFOLD=false
 FORCE=false
 START=false
+ORG=""
 EXCLUDE_FILES=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --start) START=true ;;
+    --org)
+      if [[ -z "${2:-}" || "$2" == -* ]]; then
+        echo "ERROR: --org requires an organization name"
+        exit 1
+      fi
+      ORG="$2"
+      shift
+      ;;
+    --org=*)
+      ORG="${1#--org=}"
+      if [[ -z "$ORG" ]]; then
+        echo "ERROR: --org requires an organization name"
+        exit 1
+      fi
+      ;;
     --verbose) VERBOSE=true ;;
     -n|--no-remote-check) REMOTE_CHECK=false ;;
     -s|--skip-protection) SKIP_PROTECTION=true ;;
@@ -48,6 +64,7 @@ while [[ $# -gt 0 ]]; do
 Usage: gog [options] [commit message]
 Options:
   --start               Initialize Git, create .gitignore, and setup GitHub repo
+  --org <name>          Create new GitHub repo under a specific organization
   --verbose             Force verbose output
   -n,--no-remote-check  Skip remote availability check
   -s,--skip-protection  Allow committing directly to main/master
@@ -62,6 +79,17 @@ EOF
   esac
   shift
 done
+
+if [[ -n "$ORG" ]]; then
+  if [[ "$START" == false ]]; then
+    echo "ERROR: --org only works with --start"
+    exit 1
+  fi
+  if [[ "$ORG" == */* || "$ORG" =~ [[:space:]] ]]; then
+    echo "ERROR: --org must be a single GitHub organization name, not a path"
+    exit 1
+  fi
+fi
 
 # Force interactive output visibility during startup workflows
 if [[ "$VERBOSE" == true || "$START" == true ]]; then
@@ -138,6 +166,11 @@ EOF
 
   # 4. Handle GitHub Remote creation
   if git remote get-url origin >/dev/null 2>&1; then
+    if [[ -n "$ORG" ]]; then
+      echo "ERROR: --org was provided, but remote 'origin' is already configured."
+      echo "Remove or change origin before creating a new organization repository."
+      exit $EXIT_REMOTE_ERROR
+    fi
     log "Remote 'origin' already configured. Skipping GitHub repository creation."
   else
     # Sanitize directory name to be GitHub friendly (replace spaces with hyphens)
@@ -154,8 +187,20 @@ EOF
       VISIBILITY="--public"
     fi
 
-    log "Creating GitHub repository '$REPO_NAME' ($VISIBILITY)..."
-    if ! gh repo create "$REPO_NAME" "$VISIBILITY" --source=. --remote=origin; then
+    REPO_TARGET="$REPO_NAME"
+
+    if [[ -n "$ORG" ]]; then
+      if [[ "$REPO_NAME" == */* ]]; then
+        echo "ERROR: Do not include OWNER/ in the repository name when using --org."
+        echo "Use: gog --start --org $ORG"
+        exit 1
+      fi
+
+      REPO_TARGET="$ORG/$REPO_NAME"
+    fi
+
+    log "Creating GitHub repository '$REPO_TARGET' ($VISIBILITY)..."
+    if ! gh repo create "$REPO_TARGET" "$VISIBILITY" --source=. --remote=origin; then
       echo "ERROR: Failed to create GitHub repository via 'gh' CLI."
       exit $EXIT_REMOTE_ERROR
     fi

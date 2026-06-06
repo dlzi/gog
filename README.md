@@ -12,7 +12,7 @@ It is designed to remove friction from daily Git usage by doing **the obvious, s
 
 When you run `gog`, it performs the following steps:
 
-1.  **Initialization**: (Optional) If run with `--start`, it initializes a local Git repo, optionally creates a standard `.gitignore` (prompted), prompts to create a public/private GitHub repository via the `gh` CLI, and configures the remote origin automatically.
+1.  **Initialization**: (Optional) If run with `--start`, it initializes a local Git repo, optionally creates a standard `.gitignore` (prompted), prompts to create a public/private GitHub repository via the `gh` CLI, optionally targets a GitHub organization with `--org`, and configures the remote origin automatically.
 2.  **Environment Check**: Verifies you are inside a Git repository.
 3.  **State Check**: Ensures you are on a branch (not detached HEAD).
 4.  **Branch Protection**: Blocks direct commits to `main` / `master` unless bypassed (automatically bypassed during `--start`).
@@ -69,6 +69,15 @@ This command will seamlessly:
 2. Prompt you to optionally generate a robust, production-ready `.gitignore` covering common development environments (Node, Python, IDEs, logs, and local `.env` files).
 3. Interactively prompt you for a GitHub repository name (auto-suggesting your current folder name with sanitized hyphens) and visibility (`Public` vs `Private`).
 4. Execute `gh repo create` behind the scenes to provision the remote repo, set up `origin`, override temporary initial branch protection, and execute the core staging/sync pipeline.
+
+To create the new GitHub repository inside a specific organization instead of your personal account:
+
+```bash
+gog --start --org my-organization
+
+```
+
+When `--org` is used, enter only the repository name at the prompt. `gog` builds the GitHub target as `my-organization/repository-name`. If `origin` already exists, `--org` exits instead of being ignored.
 
 ### Custom commit message
 

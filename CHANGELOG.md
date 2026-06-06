@@ -6,6 +6,16 @@ This project follows **semantic versioning** and favors stability over feature g
 
 ---
 
+## [1.4.3] — 2026-06-06
+
+### Added
+- **Organization repository creation (`--org`):** Added `--org <name>` and `--org=<name>` for `gog --start`, allowing new GitHub repositories to be created under a specific organization via GitHub CLI `OWNER/REPO` targeting.
+
+### Changed
+- `--org` now fails fast when used without `--start`, when given an invalid organization path, or when `origin` is already configured, preventing silent no-op behavior.
+
+---
+
 ## [1.4.2] — 2026-05-22
 
 ### Changed
