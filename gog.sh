@@ -2,6 +2,7 @@
 # NOTE: File must be UTF-8 encoded
 
 set -e
+set -o pipefail
 export LC_ALL=C.UTF-8
 
 # =======================
@@ -55,6 +56,10 @@ while [[ $# -gt 0 ]]; do
     -k|--keep) SCAFFOLD=true ;;
     -f|--force) FORCE=true ;;
     -e|--exclude)
+      if [[ -z "${2:-}" || "$2" == -* ]]; then
+        echo "ERROR: -e/--exclude requires a file or pattern argument"
+        exit 1
+      fi
       EXCLUDE_FILES+=("$2")
       shift 
       ;;
@@ -107,7 +112,8 @@ log() {
 # =======================
 if [[ "$START" == true ]]; then
   log "Initializing new project workflow..."
-  
+  INIT_PERFORMED=false
+
   # 1. Ensure GitHub CLI is installed
   if ! command -v gh &> /dev/null; then
     echo "ERROR: GitHub CLI ('gh') is required to create a remote repository automatically."
@@ -119,6 +125,7 @@ if [[ "$START" == true ]]; then
   if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     log "Initializing local Git repository..."
     git init
+    INIT_PERFORMED=true
   fi
 
   # 3. Optionally create a smart default .gitignore if missing
@@ -204,10 +211,16 @@ EOF
       echo "ERROR: Failed to create GitHub repository via 'gh' CLI."
       exit $EXIT_REMOTE_ERROR
     fi
+    INIT_PERFORMED=true
   fi
 
-  # Bypass branch protection safely for the initial creation push
-  SKIP_PROTECTION=true
+  # Only bypass branch protection if this run actually initialized the repo
+  # and/or remote. If both already existed, --start is a no-op re-run and
+  # normal branch protection should still apply.
+  if [[ "$INIT_PERFORMED" == true ]]; then
+    log "Bypassing branch protection for initial creation push."
+    SKIP_PROTECTION=true
+  fi
 fi
 
 # =======================
@@ -239,7 +252,7 @@ fi
 if [[ "$SCAFFOLD" == true ]]; then
   log "Scaffolding directory structure..."
   # Null-terminated handling to protect spaces/newlines in filenames
-  find . -type d -not -path '*/.*' -print0 | while IFS= read -r -d '' dir; do
+  find . -mindepth 1 -type d -not -path '*/.*' -print0 | while IFS= read -r -d '' dir; do
     if [ -z "$(ls -A "$dir")" ] || [ "$(ls -A "$dir")" = ".gitkeep" ]; then
        touch "$dir/.gitkeep"
     fi
@@ -267,7 +280,7 @@ if ! git status --porcelain | grep -q '^[AMDRC]'; then
     log "Nothing to commit, but forcing sync phase..."
   else
     echo "WARNING: Nothing to commit locally. Use -f to force sync anyway."
-    exit 0 
+    exit $EXIT_NO_COMMIT
   fi
 else
   # Polish: set specific default text if it's a fresh repository initialization
@@ -282,7 +295,10 @@ fi
 
 # SYNC LOGIC
 # Check if the branch exists on the remote (origin)
-REMOTE_EXISTS=$(git ls-remote --heads origin "$CURRENT_BRANCH" 2>/dev/null)
+if ! REMOTE_EXISTS=$(git ls-remote --heads origin "$CURRENT_BRANCH" 2>/dev/null); then
+  echo "ERROR: Could not reach remote 'origin' to check branch status."
+  exit $EXIT_REMOTE_ERROR
+fi
 
 if [[ -n "$REMOTE_EXISTS" ]]; then
   log "Syncing with GitHub (rebase)..."
@@ -292,10 +308,16 @@ if [[ -n "$REMOTE_EXISTS" ]]; then
   fi
   
   log "Pushing to '$CURRENT_BRANCH'..."
-  git push origin "$CURRENT_BRANCH"
+  if ! git push origin "$CURRENT_BRANCH"; then
+    echo "ERROR: Push to '$CURRENT_BRANCH' failed."
+    exit $EXIT_REMOTE_ERROR
+  fi
 else
   log "Setting upstream and pushing..."
-  git push -u origin "$CURRENT_BRANCH"
+  if ! git push -u origin "$CURRENT_BRANCH"; then
+    echo "ERROR: Initial push to '$CURRENT_BRANCH' failed."
+    exit $EXIT_REMOTE_ERROR
+  fi
 fi
 
 log "SUCCESS: gog complete"

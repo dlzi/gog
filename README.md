@@ -15,7 +15,7 @@ When you run `gog`, it performs the following steps:
 1.  **Initialization**: (Optional) If run with `--start`, it initializes a local Git repo, optionally creates a standard `.gitignore` (prompted), prompts to create a public/private GitHub repository via the `gh` CLI, optionally targets a GitHub organization with `--org`, and configures the remote origin automatically.
 2.  **Environment Check**: Verifies you are inside a Git repository.
 3.  **State Check**: Ensures you are on a branch (not detached HEAD).
-4.  **Branch Protection**: Blocks direct commits to `main` / `master` unless bypassed (automatically bypassed during `--start`).
+4.  **Branch Protection**: Blocks direct commits to `main` / `master` unless bypassed (automatically bypassed during `--start`, but only for the run that actually creates the local repo and/or the GitHub remote — re-running `--start` against an already-initialized repo does not bypass protection).
 5.  **Remote Check**: (Optional) verifies the remote `origin` is reachable.
 6.  **Scaffolding**: (Optional) adds `.gitkeep` to all subdirectories to preserve folder structure on GitHub.
 7.  **Staging**: Stages **all changes across the entire repository** (`git add -A`).
@@ -95,7 +95,7 @@ gog -e "config.json" -e "*.log" "Update core logic"
 
 ```
 
-> **Note**: Always place flags *before* the commit message to ensure correct processing.
+> **Note**: Always place flags *before* the commit message to ensure correct processing. `-e`/`--exclude` requires a value — omitting it (e.g. `gog -e "commit message"`) is treated as a missing argument and errors out rather than silently consuming your commit message.
 
 ### Directory Scaffolding
 
@@ -140,9 +140,9 @@ gog --verbose
 
 ## 🔐 Safety Guarantees
 
-* **Protected Branches**: Blocks `main/master` by default to prevent accidents.
+* **Protected Branches**: Blocks `main/master` by default to prevent accidents. This protection is only bypassed for the specific `--start` run that actually initializes the local repo or creates the GitHub remote — running `--start` again afterward behaves like a normal `gog` invocation and respects branch protection as usual.
 * **Safe Rebase**: Will not overwrite local work; if GitHub and local changes conflict, it exits for safety.
-* **Network Aware**: Fails fast if the remote is unreachable.
+* **Network Aware**: Fails fast if the remote is unreachable — including during the final sync/push step, not just the initial check.
 * **No Force Pushes**: Never uses `--force`, ensuring you don't delete remote history.
 
 ---
@@ -151,11 +151,11 @@ gog --verbose
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Success / Nothing to commit |
-| `10` | Nothing to commit |
+| `0` | Success (commit and/or sync completed, or `--help`/`--version`) |
+| `10` | Nothing to commit locally (use `-f` to force sync anyway) |
 | `11` | Detached HEAD |
 | `12` | Blocked branch (use `-s` to bypass) |
-| `13` | Remote/network error |
+| `13` | Remote/network error (unreachable origin, failed `gh repo create`, or failed push) |
 | `14` | Rebase conflict (Manual intervention required) |
 
 ---
