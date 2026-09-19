@@ -6,6 +6,24 @@ This project follows **semantic versioning** and favors stability over feature g
 
 ---
 
+---
+
+## [1.5.0] — 2026-09-19
+
+### Added
+- **`--remote-timeout <seconds>`:** New flag to override the default 5-second remote reachability timeout, so slow connections no longer misreport an unreachable remote. Applies to both the initial reachability check and the pre-sync branch-existence check.
+- New exit code `15` for local Git operation failures (`git add -A` or `git commit`).
+
+### Fixed
+- **Rebase failure diagnosis:** A failed `git pull --rebase` is no longer always reported as a conflict. `gog` now checks whether a rebase is actually in progress: genuine conflicts still exit `14` with the "resolve manually" message, while other failures (network, auth, diverged history) exit `13` with an accurate message instead.
+- **`--org` validation:** Broadened beyond a bare slash/whitespace check to a proper GitHub org/user name format — rejects leading, trailing, or consecutive hyphens, spaces, and slashes.
+- **Repository name slash check:** Now applied at the `--start` prompt regardless of whether `--org` is used, closing a gap where a `/` in the repository name could silently retarget the new repo to a different GitHub owner.
+- **Non-interactive `--start`:** The `.gitignore`, repository name, and visibility prompts no longer crash the script on EOF/non-interactive stdin; they now fall back to their existing interactive defaults (create `.gitignore`, use the folder name, private repo).
+- **`git add -A` / `git commit` failures:** Both are now caught with a clear error message and exit code `15` instead of letting the script terminate on raw Git output.
+- **Branch-existence check timeout:** The pre-sync `git ls-remote --heads` call is now bounded by `--remote-timeout` like the initial reachability check, instead of being able to hang indefinitely.
+
+---
+
 ## [1.4.3] — 2026-06-06
 
 ### Added

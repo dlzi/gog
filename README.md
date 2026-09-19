@@ -77,7 +77,16 @@ gog --start --org my-organization
 
 ```
 
-When `--org` is used, enter only the repository name at the prompt. `gog` builds the GitHub target as `my-organization/repository-name`. If `origin` already exists, `--org` exits instead of being ignored.
+When `--org` is used, enter only the repository name at the prompt. `gog` builds the GitHub target as `my-organization/repository-name`. If `origin` already exists, `--org` exits instead of being ignored. The organization name is validated as a proper GitHub org/user name (letters, digits, single hyphens between them; no leading, trailing, or consecutive hyphens, and no spaces or slashes). A `/` in the repository name itself is also rejected at the prompt, whether or not `--org` is used, since it would otherwise silently retarget the repo to a different owner.
+
+### Overriding the remote timeout
+
+Remote reachability checks default to a 5-second timeout. On slow connections this can misreport an unreachable remote — override it with:
+
+```bash
+gog --remote-timeout 15
+
+```
 
 ### Custom commit message
 
@@ -142,7 +151,7 @@ gog --verbose
 
 * **Protected Branches**: Blocks `main/master` by default to prevent accidents. This protection is only bypassed for the specific `--start` run that actually initializes the local repo or creates the GitHub remote — running `--start` again afterward behaves like a normal `gog` invocation and respects branch protection as usual.
 * **Safe Rebase**: Will not overwrite local work; if GitHub and local changes conflict, it exits for safety.
-* **Network Aware**: Fails fast if the remote is unreachable — including during the final sync/push step, not just the initial check.
+* **Network Aware**: Fails fast (configurable via `--remote-timeout`, default 5s) on every remote *reachability check* — the initial check and the pre-sync branch check. The actual `git pull --rebase`/`git push` transfer itself is not artificially timed out, so a slow-but-working push on a large repo won't be killed early.
 * **No Force Pushes**: Never uses `--force`, ensuring you don't delete remote history.
 
 ---
@@ -155,8 +164,9 @@ gog --verbose
 | `10` | Nothing to commit locally (use `-f` to force sync anyway) |
 | `11` | Detached HEAD |
 | `12` | Blocked branch (use `-s` to bypass) |
-| `13` | Remote/network error (unreachable origin, failed `gh repo create`, or failed push) |
-| `14` | Rebase conflict (Manual intervention required) |
+| `13` | Remote/network error (unreachable origin, failed `gh repo create`, failed push, or a `pull --rebase` failure that isn't an actual conflict) |
+| `14` | Rebase conflict — a rebase is actually in progress; resolve and run `git rebase --continue` |
+| `15` | Local Git operation failed (`git add -A` or `git commit`) |
 
 ---
 

@@ -10,7 +10,7 @@ export LC_ALL=C.UTF-8
 # =======================
 BLOCKED_BRANCHES=("main" "master")
 REMOTE_TIMEOUT=5
-VERSION="1.4.3"
+VERSION="1.5.0"
 
 # Exit codes
 EXIT_NO_COMMIT=10
@@ -18,6 +18,7 @@ EXIT_DETACHED_HEAD=11
 EXIT_BLOCKED_BRANCH=12
 EXIT_REMOTE_ERROR=13
 EXIT_REBASE_CONFIRM=14
+EXIT_GIT_ERROR=15
 
 # =======================
 # FLAGS
@@ -51,6 +52,25 @@ while [[ $# -gt 0 ]]; do
       fi
       ;;
     --verbose) VERBOSE=true ;;
+    --remote-timeout)
+      if [[ -z "${2:-}" || "$2" == -* ]]; then
+        echo "ERROR: --remote-timeout requires a number of seconds"
+        exit 1
+      fi
+      if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: --remote-timeout must be a positive integer (seconds)"
+        exit 1
+      fi
+      REMOTE_TIMEOUT="$2"
+      shift
+      ;;
+    --remote-timeout=*)
+      REMOTE_TIMEOUT="${1#--remote-timeout=}"
+      if ! [[ "$REMOTE_TIMEOUT" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: --remote-timeout must be a positive integer (seconds)"
+        exit 1
+      fi
+      ;;
     -n|--no-remote-check) REMOTE_CHECK=false ;;
     -s|--skip-protection) SKIP_PROTECTION=true ;;
     -k|--keep) SCAFFOLD=true ;;
@@ -71,6 +91,7 @@ Options:
   --start               Initialize Git, create .gitignore, and setup GitHub repo
   --org <name>          Create new GitHub repo under a specific organization
   --verbose             Force verbose output
+  --remote-timeout <n>  Override remote reachability timeout in seconds (default: 5)
   -n,--no-remote-check  Skip remote availability check
   -s,--skip-protection  Allow committing directly to main/master
   -k,--keep             Auto-add .gitkeep to empty folders
@@ -90,8 +111,8 @@ if [[ -n "$ORG" ]]; then
     echo "ERROR: --org only works with --start"
     exit 1
   fi
-  if [[ "$ORG" == */* || "$ORG" =~ [[:space:]] ]]; then
-    echo "ERROR: --org must be a single GitHub organization name, not a path"
+  if [[ ! "$ORG" =~ ^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$ ]]; then
+    echo "ERROR: --org must be a valid GitHub organization/user name (letters, digits, single hyphens between them; no leading/trailing/consecutive hyphens, spaces, or slashes)."
     exit 1
   fi
 fi
@@ -131,7 +152,7 @@ if [[ "$START" == true ]]; then
   # 3. Optionally create a smart default .gitignore if missing
   if [[ ! -f .gitignore ]]; then
     printf "Create a default .gitignore? (Y/n): "
-    read -r CREATE_GITIGNORE
+    read -r CREATE_GITIGNORE || CREATE_GITIGNORE=""
     if [[ ! "$CREATE_GITIGNORE" =~ ^[Nn]$ ]]; then
     log "Creating default .gitignore..."
     cat <<EOF > .gitignore
@@ -184,11 +205,18 @@ EOF
     SUGGESTED_NAME=$(basename "$PWD" | tr ' ' '-')
     
     printf "Enter GitHub repository name [default: %s]: " "$SUGGESTED_NAME"
-    read -r REPO_NAME
+    read -r REPO_NAME || REPO_NAME=""
     REPO_NAME=${REPO_NAME:-$SUGGESTED_NAME}
 
+    # Applies regardless of --org: a slash in the name would silently retarget
+    # the repo to a different owner via 'gh repo create'.
+    if [[ "$REPO_NAME" == */* ]]; then
+      echo "ERROR: Repository name must not contain '/'. To target an organization, use --org <name> instead."
+      exit 1
+    fi
+
     printf "Make repository Public? (y/N): "
-    read -r IS_PUBLIC
+    read -r IS_PUBLIC || IS_PUBLIC=""
     VISIBILITY="--private"
     if [[ "$IS_PUBLIC" =~ ^[Yy]$ ]]; then
       VISIBILITY="--public"
@@ -197,12 +225,6 @@ EOF
     REPO_TARGET="$REPO_NAME"
 
     if [[ -n "$ORG" ]]; then
-      if [[ "$REPO_NAME" == */* ]]; then
-        echo "ERROR: Do not include OWNER/ in the repository name when using --org."
-        echo "Use: gog --start --org $ORG"
-        exit 1
-      fi
-
       REPO_TARGET="$ORG/$REPO_NAME"
     fi
 
@@ -260,7 +282,10 @@ if [[ "$SCAFFOLD" == true ]]; then
 fi
 
 log "Staging all changes..."
-git add -A
+if ! git add -A; then
+  echo "ERROR: 'git add -A' failed."
+  exit $EXIT_GIT_ERROR
+fi
 
 if [ ${#EXCLUDE_FILES[@]} -gt 0 ]; then
   log "Excluding specified files..."
@@ -290,12 +315,15 @@ else
     COMMIT_MSG="${*:-auto update}"
   fi
   log "Commit: $COMMIT_MSG"
-  git commit -m "$COMMIT_MSG"
+  if ! git commit -m "$COMMIT_MSG"; then
+    echo "ERROR: 'git commit' failed — check output above (e.g. missing user.name/user.email, or a pre-commit hook failure)."
+    exit $EXIT_GIT_ERROR
+  fi
 fi
 
 # SYNC LOGIC
 # Check if the branch exists on the remote (origin)
-if ! REMOTE_EXISTS=$(git ls-remote --heads origin "$CURRENT_BRANCH" 2>/dev/null); then
+if ! REMOTE_EXISTS=$(timeout "$REMOTE_TIMEOUT" git ls-remote --heads origin "$CURRENT_BRANCH" 2>/dev/null); then
   echo "ERROR: Could not reach remote 'origin' to check branch status."
   exit $EXIT_REMOTE_ERROR
 fi
@@ -303,8 +331,13 @@ fi
 if [[ -n "$REMOTE_EXISTS" ]]; then
   log "Syncing with GitHub (rebase)..."
   if ! git pull --rebase origin "$CURRENT_BRANCH"; then
-    echo "ERROR: Conflict detected! Resolve manually then run: git rebase --continue"
-    exit $EXIT_REBASE_CONFIRM
+    if [[ -d "$(git rev-parse --git-path rebase-merge 2>/dev/null)" || -d "$(git rev-parse --git-path rebase-apply 2>/dev/null)" ]]; then
+      echo "ERROR: Rebase conflict detected! Resolve manually then run: git rebase --continue"
+      exit $EXIT_REBASE_CONFIRM
+    else
+      echo "ERROR: 'git pull --rebase' failed (network, auth, or diverged history) — see output above."
+      exit $EXIT_REMOTE_ERROR
+    fi
   fi
   
   log "Pushing to '$CURRENT_BRANCH'..."
