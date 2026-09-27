@@ -164,6 +164,7 @@ npm-debug.log*
 # OS files
 .DS_Store
 Thumbs.db
+.directory
 
 # Common Dependency directories
 node_modules/
