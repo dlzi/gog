@@ -6,6 +6,31 @@ This project follows **semantic versioning** and favors stability over feature g
 
 ---
 
+## [2.0.0] — Unreleased
+
+### Breaking Changes
+- **Attach checkout failures:** `--attach` now stops when Git cannot check out the remote branch, shows Git's error, and removes the `origin` remote it added for that attempt. If remote cleanup fails, it tells the user to remove `origin` manually. Removed `--prefer-local` and `--prefer-remote`; `gog` no longer force-pushes or resets local state during attach.
+- **Directory scaffolding:** Removed `-k` / `--keep`, which added `.gitkeep` files automatically.
+- **Sync option:** Replaced `-f` / `--force` with `--sync`. It still runs the normal pull/push phase when there is nothing new to commit; it does not force-push.
+- **Branch-protection alias:** Removed `--allow-main`; use `-s` or `--skip-protection`.
+
+### Ideas (Explicitly Non-Goals)
+- Amend commits
+- Force-push recovery workflows
+- General-purpose interactive staging or conflict-resolution workflows (the tracked-ignored-file prompt is a targeted safety exception)
+
+---
+
+## [1.8.0] — 2026-11-03
+
+### Added
+- **`-p` / `--pull`:** Pull the current branch from `origin` with rebase and autostash, without staging, committing, or pushing. Works on protected branches and rejects unrelated workflow options.
+
+### Fixed
+- Detect conflicts left by Git while reapplying an autostash, even when `git pull` exits successfully. Stop with exit `14` instead of reporting success or continuing to push.
+
+---
+
 ## [1.7.0] — 2026-10-31
 
 A bug-fix and documentation-accuracy release. One behavior change is noted under **Changed**.
@@ -165,10 +190,3 @@ A bug-fix and documentation-accuracy release. One behavior change is noted under
 - Any implicit force-push behavior
 
 ---
-
-## [Unreleased]
-
-### Ideas (Explicitly Non-Goals)
-- Amend commits
-- Default or implicit force-push (the explicit `--attach --prefer-local` recovery path is the only force-push)
-- General-purpose interactive staging or conflict-resolution workflows (the tracked-ignored-file prompt is a targeted safety exception)

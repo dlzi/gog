@@ -21,7 +21,7 @@ export LC_ALL=C.UTF-8
 # =======================
 BLOCKED_BRANCHES=("main" "master")
 REMOTE_TIMEOUT=5
-VERSION="1.7.0"
+VERSION="2.0.0"
 
 # Exit codes
 EXIT_NO_COMMIT=10
@@ -39,14 +39,12 @@ SILENT=true
 VERBOSE=false
 REMOTE_CHECK=true
 SKIP_PROTECTION=false
-SCAFFOLD=false
-FORCE=false
+SYNC_NO_CHANGES=false
+PULL_ONLY=false
 START=false
 ATTACH=false
 ATTACH_URL=""
 BRANCH=""
-PREFER_LOCAL=false
-PREFER_REMOTE=false
 ORG=""
 EXCLUDE_FILES=()
 
@@ -85,8 +83,6 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       ;;
-    --prefer-local) PREFER_LOCAL=true ;;
-    --prefer-remote) PREFER_REMOTE=true ;;
     --org)
       if [[ -z "${2:-}" || "$2" == -* ]]; then
         echo "ERROR: --org requires an organization name" >&2
@@ -131,9 +127,9 @@ while [[ $# -gt 0 ]]; do
       fi
       ;;
     -n|--no-remote-check) REMOTE_CHECK=false ;;
-    -s|--skip-protection|--allow-main) SKIP_PROTECTION=true ;;
-    -k|--keep) SCAFFOLD=true ;;
-    -f|--force) FORCE=true ;;
+    -s|--skip-protection) SKIP_PROTECTION=true ;;
+    --sync) SYNC_NO_CHANGES=true ;;
+    -p|--pull) PULL_ONLY=true ;;
     -e|--exclude)
       if [[ -z "${2:-}" || "$2" == -* ]]; then
         echo "ERROR: -e/--exclude requires a file or pattern argument" >&2
@@ -150,15 +146,13 @@ Options:
   --start               Initialize Git, optionally create .gitignore, and set up a GitHub repo
   --attach <url>        Attach current folder to an existing remote repository
   --branch <name>       Branch to check out when using --attach (default: auto-detect main/master)
-  --prefer-local        With --attach: keep local files, force-push to remote (backup/restore case)
-  --prefer-remote       With --attach: overwrite local files with remote versions
   --org <name>          With --start: create the new GitHub repo under an organization
   --verbose             Force verbose output
   --remote-timeout <n>  Override remote reachability timeout in seconds (default: 5)
   -n,--no-remote-check  Skip remote availability check
-  -s,--skip-protection  Allow committing directly to main/master (alias: --allow-main)
-  -k,--keep             Add .gitkeep to folders that contain no files (empty or subfolders only)
-  -f,--force            Force sync/push even if no files are staged
+  -s,--skip-protection  Allow committing directly to main/master
+  --sync                Run the pull/push phase even if there is nothing to commit
+  -p,--pull             Pull current branch from origin without committing or pushing
   -e,--exclude <file>   Exclude a file/pattern from the commit
   Tracked ignored files: prompt to stop tracking, keeping local copies
   --                    End of options (use before a commit message that starts with '-')
@@ -197,14 +191,11 @@ if [[ -n "$BRANCH" && "$ATTACH" == false ]]; then
   exit 1
 fi
 
-if [[ "$PREFER_LOCAL" == true && "$PREFER_REMOTE" == true ]]; then
-  echo "ERROR: --prefer-local and --prefer-remote cannot be used together" >&2
-  exit 1
-fi
-
-if [[ ("$PREFER_LOCAL" == true || "$PREFER_REMOTE" == true) && "$ATTACH" == false ]]; then
-  echo "ERROR: --prefer-local / --prefer-remote only work with --attach" >&2
-  exit 1
+if [[ "$PULL_ONLY" == true ]]; then
+  if [[ "$START" == true || "$ATTACH" == true || "$SYNC_NO_CHANGES" == true || "$SKIP_PROTECTION" == true || "$REMOTE_CHECK" == false || ${#EXCLUDE_FILES[@]} -gt 0 || $# -gt 0 ]]; then
+    echo "ERROR: -p/--pull cannot be combined with commit, setup, or other workflow options." >&2
+    exit 1
+  fi
 fi
 
 # Force interactive output visibility during startup workflows
@@ -215,6 +206,27 @@ fi
 log() {
   if [[ "$SILENT" == false ]]; then
     echo "$1"
+  fi
+}
+
+pull_rebase() {
+  if ! git pull --rebase --autostash origin "$CURRENT_BRANCH"; then
+    if [[ -d "$(git rev-parse --git-path rebase-merge 2>/dev/null)" || -d "$(git rev-parse --git-path rebase-apply 2>/dev/null)" ]]; then
+      echo "ERROR: Rebase conflict detected! Resolve manually then run: git rebase --continue" >&2
+      exit $EXIT_REBASE_CONFIRM
+    elif [[ -n "$(git ls-files -u)" ]]; then
+      echo "ERROR: Pull left unmerged files. Resolve the conflicts and check 'git stash list' for an autostash." >&2
+      exit $EXIT_REBASE_CONFIRM
+    else
+      echo "ERROR: 'git pull --rebase' failed (network, auth, or diverged history) — see output above." >&2
+      exit $EXIT_REMOTE_ERROR
+    fi
+  fi
+
+  # Git can exit successfully even when reapplying its autostash leaves conflicts.
+  if [[ -n "$(git ls-files -u)" ]]; then
+    echo "ERROR: Pull left unmerged files. Resolve the conflicts and check 'git stash list' for an autostash." >&2
+    exit $EXIT_REBASE_CONFIRM
   fi
 }
 
@@ -412,12 +424,12 @@ if [[ "$ATTACH" == true ]]; then
     fi
   fi
 
-  # 5. Attempt a normal checkout. If it fails because of local files, set LOCAL_CONFLICTS.
-  LOCAL_CONFLICTS=false
+  # 5. Attempt a normal checkout; leave any failure for the user to resolve.
+  CHECKOUT_FAILED=false
   if git show-ref --verify --quiet "refs/heads/$TARGET_BRANCH"; then
     # Local branch already exists
-    if ! git checkout "$TARGET_BRANCH" 2>/dev/null; then
-      LOCAL_CONFLICTS=true
+    if ! git checkout "$TARGET_BRANCH"; then
+      CHECKOUT_FAILED=true
     else
       git branch --set-upstream-to="origin/$TARGET_BRANCH" "$TARGET_BRANCH" 2>/dev/null || true
       log "Successfully attached to $ATTACH_URL (branch: $TARGET_BRANCH)"
@@ -425,8 +437,8 @@ if [[ "$ATTACH" == true ]]; then
     fi
   else
     # Create local branch tracking remote
-    if ! git checkout -b "$TARGET_BRANCH" "origin/$TARGET_BRANCH" 2>/dev/null; then
-      LOCAL_CONFLICTS=true
+    if ! git checkout -b "$TARGET_BRANCH" "origin/$TARGET_BRANCH"; then
+      CHECKOUT_FAILED=true
       # Clean up any partial state
       git branch -D "$TARGET_BRANCH" 2>/dev/null || true
     else
@@ -435,77 +447,17 @@ if [[ "$ATTACH" == true ]]; then
     fi
   fi
 
-  # 6. Handle conflicts
-  if [[ "$LOCAL_CONFLICTS" == true ]]; then
-    if [[ "$PREFER_LOCAL" == true ]]; then
-      log "Local files conflict with remote. Preferring local (will force-push)."
-      # Ensure we are on the target branch name, created from current tree
-      if git show-ref --verify --quiet "refs/heads/$TARGET_BRANCH"; then
-        if ! git checkout "$TARGET_BRANCH" 2>/dev/null; then
-          echo "ERROR: Could not check out '$TARGET_BRANCH' without overwriting local changes. Resolve the conflict and retry." >&2
-          exit $EXIT_GIT_ERROR
-        fi
-      else
-        if ! git checkout -b "$TARGET_BRANCH"; then
-          echo "ERROR: Could not create local branch '$TARGET_BRANCH'." >&2
-          exit $EXIT_GIT_ERROR
-        fi
-      fi
-      if ! git add -A; then
-        echo "ERROR: 'git add -A' failed." >&2
-        exit $EXIT_GIT_ERROR
-      fi
-      if git status --porcelain | grep . >/dev/null; then
-        if ! git commit -m "${*:-local state on attach}"; then
-          echo "ERROR: 'git commit' failed; local state was not pushed." >&2
-          exit $EXIT_GIT_ERROR
-        fi
-      fi
-      log "Force-pushing local state to origin/$TARGET_BRANCH..."
-      if ! git push --force-with-lease -u origin "$TARGET_BRANCH"; then
-        echo "ERROR: Force-push failed. Remote may have been updated by someone else, or you lack permission." >&2
-        exit $EXIT_REMOTE_ERROR
-      fi
-      log "Successfully attached (prefer-local) to $ATTACH_URL (branch: $TARGET_BRANCH)"
-      log "SUCCESS: gog complete"
-      exit 0
-    elif [[ "$PREFER_REMOTE" == true ]]; then
-      log "Local files conflict with remote. Preferring remote (overwriting local)."
-      if git show-ref --verify --quiet "refs/heads/$TARGET_BRANCH"; then
-        # The reset below would orphan commits that exist only locally: keep them on a backup branch.
-        LOCAL_ONLY=$(git rev-list --count "origin/$TARGET_BRANCH..$TARGET_BRANCH" 2>/dev/null || echo 0)
-        if [[ "$LOCAL_ONLY" -gt 0 ]]; then
-          BACKUP_BRANCH="gog-backup/$TARGET_BRANCH-$(date +%Y%m%d-%H%M%S)"
-          if ! git branch "$BACKUP_BRANCH" "$TARGET_BRANCH"; then
-            echo "ERROR: Could not create backup branch '$BACKUP_BRANCH'; refusing to discard $LOCAL_ONLY local commit(s)." >&2
-            exit $EXIT_GIT_ERROR
-          fi
-          log "Saved $LOCAL_ONLY local-only commit(s) on branch '$BACKUP_BRANCH'."
-        fi
-        git checkout -f "$TARGET_BRANCH"
-        git reset --hard "origin/$TARGET_BRANCH"
-      else
-        git checkout -f -b "$TARGET_BRANCH" "origin/$TARGET_BRANCH"
-      fi
-      log "Successfully attached (prefer-remote) to $ATTACH_URL (branch: $TARGET_BRANCH)"
-      SKIP_PROTECTION=true
-      # Fall through to normal workflow
-    else
-      # Clean up the remote we added so the user can re-run cleanly
-      git remote remove origin 2>/dev/null || true
-      echo "ERROR: Local files conflict with remote branch '$TARGET_BRANCH'." >&2
-      echo "" >&2
-      echo "This is common after restoring a backup or moving machines." >&2
-      echo "Choose one strategy and re-run:" >&2
-      echo "" >&2
-      echo "  # Keep YOUR local files and replace the remote branch:" >&2
-      echo "  gog --attach $ATTACH_URL --prefer-local \"your message\"" >&2
-      echo "" >&2
-      echo "  # Keep the REMOTE files and discard conflicting local ones:" >&2
-      echo "  gog --attach $ATTACH_URL --prefer-remote" >&2
-      echo "" >&2
+  # 6. Stop if Git could not check out the remote branch.
+  if [[ "$CHECKOUT_FAILED" == true ]]; then
+    # Remove the origin added by this attempt so attach can be retried after resolution.
+    if ! git remote remove origin 2>/dev/null; then
+      echo "ERROR: Could not check out remote branch '$TARGET_BRANCH' and failed to remove origin." >&2
+      echo "Resolve the Git error above, then remove origin with 'git remote remove origin'." >&2
       exit 1
     fi
+    echo "ERROR: Could not check out remote branch '$TARGET_BRANCH'." >&2
+    echo "Resolve the Git error above, then retry --attach." >&2
+    exit 1
   fi
 fi
 
@@ -516,6 +468,22 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "ERROR: Not a Git 
 
 if ! CURRENT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null); then
   echo "Detached HEAD state detected" >&2; exit $EXIT_DETACHED_HEAD
+fi
+
+if [[ "$PULL_ONLY" == true ]]; then
+  git remote get-url origin >/dev/null 2>&1 || { echo "ERROR: Remote 'origin' not configured" >&2; exit $EXIT_REMOTE_ERROR; }
+  if ! REMOTE_EXISTS=$(timeout "$REMOTE_TIMEOUT" git ls-remote --heads origin "refs/heads/$CURRENT_BRANCH" 2>/dev/null); then
+    echo "ERROR: Could not reach remote 'origin' to check branch status." >&2
+    exit $EXIT_REMOTE_ERROR
+  fi
+  if [[ -z "$REMOTE_EXISTS" ]]; then
+    echo "ERROR: Branch '$CURRENT_BRANCH' does not exist on remote 'origin'." >&2
+    exit $EXIT_REMOTE_ERROR
+  fi
+  log "Pulling from origin/$CURRENT_BRANCH (rebase)..."
+  pull_rebase
+  log "SUCCESS: pull complete"
+  exit 0
 fi
 
 if [[ "$SKIP_PROTECTION" == false ]]; then
@@ -575,22 +543,6 @@ fi
 # WORKFLOW
 # =======================
 
-if [[ "$SCAFFOLD" == true ]]; then
-  log "Scaffolding directory structure..."
-  # Null-terminated handling to protect spaces/newlines in filenames
-  find . -mindepth 1 -type d -not -path '*/.*' -print0 | while IFS= read -r -d '' dir; do
-    # Folders Git ignores (e.g. node_modules) would never track a .gitkeep.
-    if git check-ignore -q -- "$dir"; then
-      continue
-    fi
-    # A folder with no files of its own (empty, or holding only subfolders) gets a .gitkeep,
-    # so GitHub does not collapse chains like a/b/c into a single row.
-    if [ -z "$(find "$dir" -mindepth 1 -maxdepth 1 ! -type d | head -n 1)" ]; then
-      touch "$dir/.gitkeep"
-    fi
-  done
-fi
-
 log "Staging all changes..."
 if ! git add -A; then
   echo "ERROR: 'git add -A' failed." >&2
@@ -619,12 +571,12 @@ fi
 # grep must read all of its input (no -q): with pipefail, an early-exiting grep can make
 # git status die from SIGPIPE on large change sets and be misread as "nothing to commit".
 if ! git status --porcelain | grep '^[AMDRC]' >/dev/null; then
-  if [[ "$FORCE" == true ]]; then
-    log "Nothing to commit, but forcing sync phase..."
+  if [[ "$SYNC_NO_CHANGES" == true ]]; then
+    log "Nothing to commit, but running sync phase..."
   elif [[ "$ATTACH" == true ]]; then
     log "Nothing to commit after attach; syncing with remote..."
   else
-    echo "WARNING: Nothing to commit locally. Use -f to force sync anyway." >&2
+    echo "WARNING: Nothing to commit locally. Use --sync to run the sync phase anyway." >&2
     exit $EXIT_NO_COMMIT
   fi
 else
@@ -651,15 +603,7 @@ fi
 if [[ -n "$REMOTE_EXISTS" ]]; then
   log "Syncing with GitHub (rebase)..."
   # --autostash: files left out of the commit with -e may still have uncommitted changes.
-  if ! git pull --rebase --autostash origin "$CURRENT_BRANCH"; then
-    if [[ -d "$(git rev-parse --git-path rebase-merge 2>/dev/null)" || -d "$(git rev-parse --git-path rebase-apply 2>/dev/null)" ]]; then
-      echo "ERROR: Rebase conflict detected! Resolve manually then run: git rebase --continue" >&2
-      exit $EXIT_REBASE_CONFIRM
-    else
-      echo "ERROR: 'git pull --rebase' failed (network, auth, or diverged history) — see output above." >&2
-      exit $EXIT_REMOTE_ERROR
-    fi
-  fi
+  pull_rebase
   
   log "Pushing to '$CURRENT_BRANCH'..."
   if ! git push origin "$CURRENT_BRANCH"; then
