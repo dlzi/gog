@@ -8,6 +8,12 @@ This project follows **semantic versioning** and favors stability over feature g
 
 ## [2.0.0] — Unreleased
 
+### Fixed
+- `--attach` refuses to run from a child folder of another Git repository, uses the remote's advertised default branch when available, and does not echo the remote URL in progress messages.
+- Staged file-type changes are now committed, including regular files changed to symlinks.
+- Remote branch checks run before ignored-file cleanup, so a failed reachability check cannot leave that cleanup staged.
+- Normal commits, pulls, and pushes use Git's quiet mode while preserving failure output.
+
 ### Breaking Changes
 - **Attach checkout failures:** `--attach` now stops when Git cannot check out the remote branch, shows Git's error, and removes the `origin` remote it added for that attempt. If remote cleanup fails, it tells the user to remove `origin` manually. Removed `--prefer-local` and `--prefer-remote`; `gog` no longer force-pushes or resets local state during attach.
 - **Directory scaffolding:** Removed `-k` / `--keep`, which added `.gitkeep` files automatically.

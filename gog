@@ -145,7 +145,7 @@ Usage: gog [options] [commit message]
 Options:
   --start               Initialize Git, optionally create .gitignore, and set up a GitHub repo
   --attach <url>        Attach current folder to an existing remote repository
-  --branch <name>       Branch to check out when using --attach (default: auto-detect main/master)
+  --branch <name>       Branch to check out with --attach (default: remote HEAD, then main/master)
   --org <name>          With --start: create the new GitHub repo under an organization
   --verbose             Force verbose output
   --remote-timeout <n>  Override remote reachability timeout in seconds (default: 5)
@@ -202,6 +202,10 @@ fi
 if [[ "$VERBOSE" == true || "$START" == true || "$ATTACH" == true ]]; then
   SILENT=false
 fi
+GIT_QUIET_ARGS=()
+if [[ "$SILENT" == true ]]; then
+  GIT_QUIET_ARGS=(-q)
+fi
 
 log() {
   if [[ "$SILENT" == false ]]; then
@@ -210,7 +214,7 @@ log() {
 }
 
 pull_rebase() {
-  if ! git pull --rebase --autostash origin "$CURRENT_BRANCH"; then
+  if ! git pull "${GIT_QUIET_ARGS[@]}" --rebase --autostash origin "$CURRENT_BRANCH"; then
     if [[ -d "$(git rev-parse --git-path rebase-merge 2>/dev/null)" || -d "$(git rev-parse --git-path rebase-apply 2>/dev/null)" ]]; then
       echo "ERROR: Rebase conflict detected! Resolve manually then run: git rebase --continue" >&2
       exit $EXIT_REBASE_CONFIRM
@@ -368,6 +372,15 @@ if [[ "$ATTACH" == true ]]; then
     exit 1
   fi
 
+  # Do not attach the containing repository when invoked from a child folder.
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+     && [[ "$(git rev-parse --show-toplevel)" != "$(pwd -P)" ]]; then
+    echo "ERROR: This folder is inside another Git repository:" >&2
+    echo "  $(git rev-parse --show-toplevel)" >&2
+    echo "Move the folder out, or run 'git init' here if you intentionally want a nested repository." >&2
+    exit 1
+  fi
+
   # 1. Initialize local Git repo if it doesn't exist
   if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     log "Initializing local Git repository..."
@@ -381,7 +394,7 @@ if [[ "$ATTACH" == true ]]; then
     exit $EXIT_REMOTE_ERROR
   fi
 
-  log "Adding remote origin: $ATTACH_URL"
+  log "Adding remote origin..."
   if ! git remote add origin "$ATTACH_URL"; then
     echo "ERROR: Failed to add remote 'origin'." >&2
     exit $EXIT_REMOTE_ERROR
@@ -389,7 +402,7 @@ if [[ "$ATTACH" == true ]]; then
 
   # 3. Fetch remote history
   log "Checking remote reachability..."
-  if ! timeout "$REMOTE_TIMEOUT" git ls-remote origin >/dev/null 2>&1; then
+  if ! REMOTE_HEAD_INFO=$(timeout "$REMOTE_TIMEOUT" git ls-remote --symref origin HEAD 2>/dev/null); then
     echo "ERROR: Remote not reachable within ${REMOTE_TIMEOUT}s. Check the URL, network, and authentication (or raise --remote-timeout)." >&2
     git remote remove origin 2>/dev/null || true
     exit $EXIT_REMOTE_ERROR
@@ -406,12 +419,18 @@ if [[ "$ATTACH" == true ]]; then
   # 4. Determine target branch
   TARGET_BRANCH="$BRANCH"
   if [[ -z "$TARGET_BRANCH" ]]; then
-    if git show-ref --verify --quiet refs/remotes/origin/main; then
+    REMOTE_DEFAULT_BRANCH=""
+    if [[ "$REMOTE_HEAD_INFO" =~ ^ref:[[:space:]]+refs/heads/([^[:space:]]+)[[:space:]]+HEAD ]]; then
+      REMOTE_DEFAULT_BRANCH="${BASH_REMATCH[1]}"
+    fi
+    if [[ -n "$REMOTE_DEFAULT_BRANCH" ]] && git show-ref --verify --quiet "refs/remotes/origin/$REMOTE_DEFAULT_BRANCH"; then
+      TARGET_BRANCH="$REMOTE_DEFAULT_BRANCH"
+    elif git show-ref --verify --quiet refs/remotes/origin/main; then
       TARGET_BRANCH="main"
     elif git show-ref --verify --quiet refs/remotes/origin/master; then
       TARGET_BRANCH="master"
     else
-      echo "ERROR: Could not auto-detect 'main' or 'master' on the remote." >&2
+      echo "ERROR: Could not find the remote's default branch, 'main', or 'master'." >&2
       echo "Specify the branch explicitly with --branch <name>" >&2
       git remote remove origin 2>/dev/null || true
       exit 1
@@ -432,7 +451,7 @@ if [[ "$ATTACH" == true ]]; then
       CHECKOUT_FAILED=true
     else
       git branch --set-upstream-to="origin/$TARGET_BRANCH" "$TARGET_BRANCH" 2>/dev/null || true
-      log "Successfully attached to $ATTACH_URL (branch: $TARGET_BRANCH)"
+      log "Successfully attached to origin (branch: $TARGET_BRANCH)"
       SKIP_PROTECTION=true
     fi
   else
@@ -442,7 +461,7 @@ if [[ "$ATTACH" == true ]]; then
       # Clean up any partial state
       git branch -D "$TARGET_BRANCH" 2>/dev/null || true
     else
-      log "Successfully attached to $ATTACH_URL (branch: $TARGET_BRANCH)"
+      log "Successfully attached to origin (branch: $TARGET_BRANCH)"
       SKIP_PROTECTION=true
     fi
   fi
@@ -494,6 +513,17 @@ if [[ "$SKIP_PROTECTION" == false ]]; then
   done
 fi
 
+git remote get-url origin >/dev/null 2>&1 || { echo "ERROR: Remote 'origin' not configured" >&2; exit $EXIT_REMOTE_ERROR; }
+if [[ "$REMOTE_CHECK" == true ]]; then
+  timeout "$REMOTE_TIMEOUT" git ls-remote origin >/dev/null 2>&1 || { echo "ERROR: Remote 'origin' unreachable" >&2; exit $EXIT_REMOTE_ERROR; }
+fi
+
+# Check the remote branch before staging or removing anything from the index.
+if ! REMOTE_EXISTS=$(timeout "$REMOTE_TIMEOUT" git ls-remote --heads origin "refs/heads/$CURRENT_BRANCH" 2>/dev/null); then
+  echo "ERROR: Could not reach remote 'origin' to check branch status." >&2
+  exit $EXIT_REMOTE_ERROR
+fi
+
 # =======================
 # SAFETY: TRACKED FILES MATCHING IGNORE RULES
 # =======================
@@ -534,11 +564,6 @@ if ((${#IGNORED_TRACKED_FILES[@]} > 0)); then
   esac
 fi
 
-if [[ "$REMOTE_CHECK" == true ]]; then
-  git remote get-url origin >/dev/null 2>&1 || { echo "ERROR: Remote 'origin' not configured" >&2; exit $EXIT_REMOTE_ERROR; }
-  timeout "$REMOTE_TIMEOUT" git ls-remote origin >/dev/null 2>&1 || { echo "ERROR: Remote 'origin' unreachable" >&2; exit $EXIT_REMOTE_ERROR; }
-fi
-
 # =======================
 # WORKFLOW
 # =======================
@@ -567,10 +592,14 @@ if [ ${#EXCLUDE_FILES[@]} -gt 0 ]; then
 fi
 
 # COMMIT LOGIC
-# Use the plumbing status check: 'git diff --cached' crashes if HEAD doesn't exist yet.
-# grep must read all of its input (no -q): with pipefail, an early-exiting grep can make
-# git status die from SIGPIPE on large change sets and be misread as "nothing to commit".
-if ! git status --porcelain | grep '^[AMDRC]' >/dev/null; then
+# git diff --cached works before the first commit and catches type changes too.
+STAGED_DIFF_STATUS=0
+git diff --cached --quiet || STAGED_DIFF_STATUS=$?
+if (( STAGED_DIFF_STATUS > 1 )); then
+  echo "ERROR: Could not check staged changes." >&2
+  exit $EXIT_GIT_ERROR
+fi
+if (( STAGED_DIFF_STATUS == 0 )); then
   if [[ "$SYNC_NO_CHANGES" == true ]]; then
     log "Nothing to commit, but running sync phase..."
   elif [[ "$ATTACH" == true ]]; then
@@ -587,32 +616,26 @@ else
     COMMIT_MSG="${*:-auto update}"
   fi
   log "Commit: $COMMIT_MSG"
-  if ! git commit -m "$COMMIT_MSG"; then
+  if ! git commit "${GIT_QUIET_ARGS[@]}" -m "$COMMIT_MSG"; then
     echo "ERROR: 'git commit' failed — check output above (e.g. missing user.name/user.email, or a pre-commit hook failure)." >&2
     exit $EXIT_GIT_ERROR
   fi
 fi
 
 # SYNC LOGIC
-# Check if the branch exists on the remote (origin)
-if ! REMOTE_EXISTS=$(timeout "$REMOTE_TIMEOUT" git ls-remote --heads origin "refs/heads/$CURRENT_BRANCH" 2>/dev/null); then
-  echo "ERROR: Could not reach remote 'origin' to check branch status." >&2
-  exit $EXIT_REMOTE_ERROR
-fi
-
 if [[ -n "$REMOTE_EXISTS" ]]; then
   log "Syncing with GitHub (rebase)..."
   # --autostash: files left out of the commit with -e may still have uncommitted changes.
   pull_rebase
   
   log "Pushing to '$CURRENT_BRANCH'..."
-  if ! git push origin "$CURRENT_BRANCH"; then
+  if ! git push "${GIT_QUIET_ARGS[@]}" origin "$CURRENT_BRANCH"; then
     echo "ERROR: Push to '$CURRENT_BRANCH' failed." >&2
     exit $EXIT_REMOTE_ERROR
   fi
 else
   log "Setting upstream and pushing..."
-  if ! git push -u origin "$CURRENT_BRANCH"; then
+  if ! git push "${GIT_QUIET_ARGS[@]}" -u origin "$CURRENT_BRANCH"; then
     echo "ERROR: Initial push to '$CURRENT_BRANCH' failed." >&2
     exit $EXIT_REMOTE_ERROR
   fi

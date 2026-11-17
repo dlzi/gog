@@ -16,8 +16,8 @@ When you run `gog`, it performs the following steps:
 2.  **Environment Check**: Verifies you are inside a Git repository.
 3.  **State Check**: Ensures you are on a branch (not detached HEAD).
 4.  **Branch Protection**: Blocks direct commits to `main` / `master` unless bypassed. Protection is bypassed automatically only for a run that actually does something new: a `--start` run that creates the local repo and/or the GitHub remote (re-running `--start` against an already-initialized repo does not bypass it), and a `--attach` run that successfully attaches.
-5.  **Ignored-File Safety Check**: Detects tracked files that match Git ignore rules. If found, asks whether to stop tracking them while retaining the local copies.
-6.  **Remote Check**: (Optional) verifies the remote `origin` is reachable.
+5.  **Remote Check**: Verifies `origin` and the current remote branch before ignored-file cleanup or staging. The optional initial reachability check can be skipped with `-n`.
+6.  **Ignored-File Safety Check**: Detects tracked files that match Git ignore rules. If found, asks whether to stop tracking them while retaining the local copies.
 7.  **Staging**: Stages **all changes across the repository** (`git add -A`), including any approved removals from tracking.
 8.  **Exclusion**: (Optional) unstages specific files or patterns provided via `-e`.
 9.  **Committing**: Commits with a provided message, a default "auto update", or "initial commit" if initializing or attaching.
@@ -72,7 +72,7 @@ gog
 | `--start` | Initialize Git (if needed), optionally create a `.gitignore`, create a GitHub repo, and push. |
 | `--org <name>` | With `--start`: create the repo under an organization. |
 | `--attach <url>` | Attach the current folder to an existing remote repository. |
-| `--branch <name>` | With `--attach`: branch to check out (default: auto-detect `main` / `master`). |
+| `--branch <name>` | With `--attach`: branch to check out (default: the remote's default branch, then `main` / `master`). |
 | `-e`, `--exclude <path>` | Leave a file or pattern out of this commit. Repeatable. |
 | `-s`, `--skip-protection` | Allow committing directly to `main` / `master`. |
 | `--sync` | Run the sync phase even if there is nothing to commit. |
@@ -129,7 +129,7 @@ To link an existing directory to a remote repository:
 gog --attach https://github.com/owner/repo.git
 ```
 
-By default, `gog` looks for the remote `main` or `master` branch; use `--branch <name>` to specify another branch. Attaching an empty folder simply checks out the remote branch and exits `0` — there is nothing to commit. A successful attach also bypasses branch protection for that run.
+By default, `gog` uses the remote's default branch. If the remote does not advertise one, it looks for `main` or `master`; use `--branch <name>` to specify another branch. Attaching an empty folder simply checks out the remote branch and exits `0` — there is nothing to commit. A successful attach also bypasses branch protection for that run. Running `--attach` inside a child folder of another Git repository is refused so it cannot attach the parent repository by mistake.
 
 The remote's reachability is checked within the `--remote-timeout` limit (default 5 seconds); the fetch that follows is not timed out.
 
