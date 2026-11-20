@@ -31,6 +31,7 @@ EXIT_REMOTE_ERROR=13
 EXIT_REBASE_CONFIRM=14
 EXIT_GIT_ERROR=15
 EXIT_TRACKED_IGNORED=16
+EXIT_REVIEW_REQUIRED=17
 
 # =======================
 # FLAGS
@@ -155,6 +156,7 @@ Options:
   -p,--pull             Pull current branch from origin without committing or pushing
   -e,--exclude <file>   Exclude a file/pattern from the commit
   Tracked ignored files: prompt to stop tracking, keeping local copies
+  Rebase conflicts: choose manual (default), prefer local, or prefer remote
   --                    End of options (use before a commit message that starts with '-')
   --version             Show the current gog version
   --help                Show this help
@@ -213,11 +215,59 @@ log() {
   fi
 }
 
+REBASE_PREFERENCE=""
 pull_rebase() {
   if ! git pull "${GIT_QUIET_ARGS[@]}" --rebase --autostash origin "$CURRENT_BRANCH"; then
-    if [[ -d "$(git rev-parse --git-path rebase-merge 2>/dev/null)" || -d "$(git rev-parse --git-path rebase-apply 2>/dev/null)" ]]; then
-      echo "ERROR: Rebase conflict detected! Resolve manually then run: git rebase --continue" >&2
-      exit $EXIT_REBASE_CONFIRM
+    if [[ -n "$(git ls-files -u)" ]] &&
+       [[ -d "$(git rev-parse --git-path rebase-merge 2>/dev/null)" || -d "$(git rev-parse --git-path rebase-apply 2>/dev/null)" ]]; then
+      CONFLICT_FILES=()
+      mapfile -d '' -t CONFLICT_FILES < <(git diff --name-only --diff-filter=U -z)
+      printf 'Rebase conflicts in:\n' >&2
+      if ((${#CONFLICT_FILES[@]} > 0)); then
+        printf '  %q\n' "${CONFLICT_FILES[@]}" >&2
+      fi
+      printf 'A preference may discard overlapping edits from the other side.\n' >&2
+      printf 'Choose [M]anual (default), prefer [L]ocal, or prefer [R]emote: ' >&2
+      REBASE_CHOICE=""
+      IFS= read -r REBASE_CHOICE || REBASE_CHOICE=""
+      case "${REBASE_CHOICE,,}" in
+        l|local)
+          REBASE_STRATEGY=theirs
+          REBASE_PREFERENCE=local
+          ;;
+        r|remote)
+          REBASE_STRATEGY=ours
+          REBASE_PREFERENCE=remote
+          ;;
+        *)
+          echo "Rebase left for manual resolution. Resolve the files, run 'git add -- <resolved-files>', then 'git rebase --continue'. Review and push when complete." >&2
+          exit $EXIT_REBASE_CONFIRM
+          ;;
+      esac
+      # During a rebase, "theirs" is the local commit being replayed and
+      # "ours" is the remote history. Pin the fetched commit so the retry
+      # cannot silently include newer remote changes after the prompt. Git
+      # may choose an entire binary file when applying a preference.
+      if ! FETCHED_HEAD=$(git rev-parse --verify 'FETCH_HEAD^{commit}' 2>/dev/null); then
+        echo "ERROR: Could not identify the fetched commit. Resolve the rebase manually." >&2
+        exit $EXIT_REBASE_CONFIRM
+      fi
+      if ! git rebase --abort; then
+        echo "ERROR: Could not abort the conflicted rebase. Resolve it manually." >&2
+        exit $EXIT_REBASE_CONFIRM
+      fi
+      if ! git rebase "${GIT_QUIET_ARGS[@]}" --autostash -X "$REBASE_STRATEGY" "$FETCHED_HEAD"; then
+        if [[ -n "$(git ls-files -u)" ]]; then
+          if [[ -d "$(git rev-parse --git-path rebase-merge 2>/dev/null)" || -d "$(git rev-parse --git-path rebase-apply 2>/dev/null)" ]]; then
+            echo "ERROR: Rebase still needs manual resolution; check the Git output above." >&2
+          else
+            echo "ERROR: Autostash left unmerged files; resolve them and check 'git stash list'." >&2
+          fi
+          exit $EXIT_REBASE_CONFIRM
+        fi
+        echo "ERROR: Rebase retry failed; check the Git output above." >&2
+        exit $EXIT_REMOTE_ERROR
+      fi
     elif [[ -n "$(git ls-files -u)" ]]; then
       echo "ERROR: Pull left unmerged files. Resolve the conflicts and check 'git stash list' for an autostash." >&2
       exit $EXIT_REBASE_CONFIRM
@@ -231,6 +281,9 @@ pull_rebase() {
   if [[ -n "$(git ls-files -u)" ]]; then
     echo "ERROR: Pull left unmerged files. Resolve the conflicts and check 'git stash list' for an autostash." >&2
     exit $EXIT_REBASE_CONFIRM
+  fi
+  if [[ -n "$REBASE_PREFERENCE" ]]; then
+    printf 'Rebase completed with %s edits preferred where changes conflicted.\n' "$REBASE_PREFERENCE" >&2
   fi
 }
 
@@ -501,6 +554,9 @@ if [[ "$PULL_ONLY" == true ]]; then
   fi
   log "Pulling from origin/$CURRENT_BRANCH (rebase)..."
   pull_rebase
+  if [[ -n "$REBASE_PREFERENCE" ]]; then
+    printf 'Review the result before pushing. No push was performed.\n' >&2
+  fi
   log "SUCCESS: pull complete"
   exit 0
 fi
@@ -627,6 +683,12 @@ if [[ -n "$REMOTE_EXISTS" ]]; then
   log "Syncing with GitHub (rebase)..."
   # --autostash: files left out of the commit with -e may still have uncommitted changes.
   pull_rebase
+  if [[ -n "$REBASE_PREFERENCE" ]]; then
+    printf 'Review the rebased changes before pushing. No push was performed:\n' >&2
+    printf '  git diff %q\n' "origin/$CURRENT_BRANCH...HEAD" >&2
+    printf '  git push origin %q\n' "$CURRENT_BRANCH" >&2
+    exit $EXIT_REVIEW_REQUIRED
+  fi
   
   log "Pushing to '$CURRENT_BRANCH'..."
   if ! git push "${GIT_QUIET_ARGS[@]}" origin "$CURRENT_BRANCH"; then

@@ -21,7 +21,7 @@ When you run `gog`, it performs the following steps:
 7.  **Staging**: Stages **all changes across the repository** (`git add -A`), including any approved removals from tracking.
 8.  **Exclusion**: (Optional) unstages specific files or patterns provided via `-e`.
 9.  **Committing**: Commits with a provided message, a default "auto update", or "initial commit" if initializing or attaching.
-10. **Auto-Sync**: Pulls remote changes via `rebase` (with `--autostash`, so files you left out with `-e` don't block it) to handle edits made directly on GitHub.
+10. **Auto-Sync**: Pulls remote changes via `rebase` (with `--autostash`, so files you left out with `-e` don't block it) to handle edits made directly on GitHub. If commits conflict, lists the files and asks whether to resolve manually or retry while preferring local or remote edits.
 11. **Pushing**: Pushes to the current branch and sets upstream if needed.
 
 ---
@@ -91,7 +91,11 @@ Anything else that starts with `-` is rejected with an error (exit `1`) rather t
 gog -p
 ```
 
-This pulls the current branch from `origin` with `git pull --rebase --autostash`, including on `main` or `master`. Git temporarily stashes local uncommitted changes and attempts to restore them; previously staged changes may be restored as unstaged changes. It does not run the staging, commit, or push phases. The branch must already exist on `origin`. For a commit rebase conflict, resolve it with `git rebase --continue`; for an autostash conflict, resolve the unmerged files and check `git stash list` for the saved changes. Use `--verbose` to show `gog` progress messages. `-p` cannot be combined with a commit message or other workflow options.
+This pulls the current branch from `origin` with `git pull --rebase --autostash`, including on `main` or `master`. Git temporarily stashes local uncommitted changes and attempts to restore them; previously staged changes may be restored as unstaged changes. It does not run the staging, commit, or push phases. The branch must already exist on `origin`. If local commits conflict with remote changes, `gog` lists the conflicted files and asks for Manual (`m`, Enter, or no input), Prefer local (`l`), or Prefer remote (`r`). Manual leaves the rebase paused: resolve the files, stage them with `git add -- <resolved-files>`, and run `git rebase --continue`.
+
+A preference aborts and retries the rebase against the commit already fetched. For text files, it chooses the selected side in conflicting hunks and keeps nonconflicting changes from both sides. For binary conflicts, Git may choose an entire file. Either preference can discard changes from the other side. If the retry or autostash still conflicts, resolve the unmerged files manually; check `git stash list` for an autostash conflict. Use `--verbose` to show `gog` progress messages. `-p` cannot be combined with a commit message or other workflow options.
+
+The same conflict choices apply to normal sync (`gog` or `gog -s`). After a successful local or remote preference, `gog` exits `17` without pushing and prints commands to review the rebased changes and push manually. A normal conflict-free sync still pushes automatically.
 
 ### New Project Initialization
 
@@ -242,14 +246,14 @@ gog --verbose
 
 * **Whole-Repo Staging**: Everything changed is staged; specific file paths don't matter, though you can exclude outliers with `-e`.
 * **Linear History**: Uses `rebase` during sync to keep your commit history clean and straight.
-* **Safety First**: Stops on rebase conflicts and requires explicit approval before untracking ignored files in the normal commit workflow.
+* **Safety First**: Defaults to manual resolution for rebase conflicts and asks before untracking ignored files.
 
 ---
 
 ## 🔐 Safety Guarantees
 
 * **Protected Branches**: Blocks `main/master` by default to prevent accidents. This protection is only bypassed for a `--start` run that actually initializes the local repo or creates the GitHub remote, or a `--attach` run that attaches successfully — running `--start` again afterward behaves like a normal `gog` invocation and respects branch protection as usual.
-* **Safe Rebase**: Will not overwrite local work; if GitHub and local changes conflict, it exits for safety.
+* **Safe Rebase**: A local or remote preference applies only after an explicit choice. Manual resolution is the default; a successful preference stops before pushing so you can review the rebased changes.
 * **Network Aware**: Fails fast (configurable via `--remote-timeout`, default 5s) on every remote *reachability check* — the initial check, the pre-sync branch check, and the reachability check at the start of `--attach`. The actual `git fetch` / `git pull --rebase` / `git push` transfers are not artificially timed out, so a slow-but-working transfer on a large repo won't be killed early.
 * **Preserves Ignored Local Files**: With confirmation, removes ignored files only from the Git index (`--cached`), not the working directory.
 * **No Force Pushes**: `gog` never force-pushes.
@@ -267,13 +271,14 @@ gog --verbose
 | `11` | Detached HEAD |
 | `12` | Blocked branch (use `-s` to bypass) |
 | `13` | Remote/network error (unreachable origin, failed `gh repo create`, failed push, or a `pull --rebase` failure that isn't an actual conflict) |
-| `14` | Pull conflict — resolve the unmerged files; run `git rebase --continue` if a rebase is in progress, or check `git stash list` if applying the autostash conflicted |
+| `14` | Pull conflict left for manual resolution or still unresolved — resolve the unmerged files; run `git rebase --continue` if a rebase is in progress, or check `git stash list` if applying the autostash conflicted |
 | `15` | Local Git operation failed (`git add -A`, `git commit`, or untracking an ignored file) |
 | `16` | Ignored tracked-file cleanup declined or not confirmed (including EOF/non-interactive input) |
+| `17` | Rebase completed with a local or remote preference during sync; review the result and push manually |
 
 The `git init` commands in `--start` and `--attach` are not individually guarded; if one fails, `gog` exits with Git's own exit status.
 
-**Output streams:** errors, warnings and the ignored-file prompt go to stderr. Progress messages (shown with `--verbose`, `--start` or `--attach`), `--version` and `--help` go to stdout.
+**Output streams:** errors, warnings, and confirmation prompts go to stderr. Progress messages (shown with `--verbose`, `--start` or `--attach`), `--version` and `--help` go to stdout.
 
 ---
 

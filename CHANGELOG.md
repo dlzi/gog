@@ -13,6 +13,7 @@ This project follows **semantic versioning** and favors stability over feature g
 - Staged file-type changes are now committed, including regular files changed to symlinks.
 - Remote branch checks run before ignored-file cleanup, so a failed reachability check cannot leave that cleanup staged.
 - Normal commits, pulls, and pushes use Git's quiet mode while preserving failure output.
+- A rebase conflict now lists the affected files and offers Manual (default), Prefer local, or Prefer remote. A preference retries the rebase and stops before pushing for review (exit `17`); unresolved retries and autostash conflicts still stop for manual resolution.
 
 ### Breaking Changes
 - **Attach checkout failures:** `--attach` now stops when Git cannot check out the remote branch, shows Git's error, and removes the `origin` remote it added for that attempt. If remote cleanup fails, it tells the user to remove `origin` manually. Removed `--prefer-local` and `--prefer-remote`; `gog` no longer force-pushes or resets local state during attach.
@@ -23,7 +24,7 @@ This project follows **semantic versioning** and favors stability over feature g
 ### Ideas (Explicitly Non-Goals)
 - Amend commits
 - Force-push recovery workflows
-- General-purpose interactive staging or conflict-resolution workflows (the tracked-ignored-file prompt is a targeted safety exception)
+- General-purpose interactive staging or per-file conflict-resolution workflows
 
 ---
 
