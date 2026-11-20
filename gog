@@ -287,6 +287,21 @@ pull_rebase() {
   fi
 }
 
+# Git detaches HEAD while a rebase is paused. Do not treat that as an ordinary
+# detached checkout or attempt to start another commit/pull on top of it.
+if [[ -d "$(git rev-parse --git-path rebase-merge 2>/dev/null)" ||
+      -d "$(git rev-parse --git-path rebase-apply 2>/dev/null)" ]]; then
+  echo "ERROR: A rebase is already in progress; HEAD is temporarily detached." >&2
+  if [[ -n "$(git ls-files -u)" ]]; then
+    echo "Resolve the conflicted files, stage them, then run 'git rebase --continue'." >&2
+    echo "To retry with gog's conflict choices, run 'git rebase --abort' then 'gog -p'." >&2
+    echo "Aborting discards any conflict-resolution edits made since the rebase stopped." >&2
+  else
+    echo "Run 'git rebase --continue' to finish it, or 'git rebase --abort' to cancel it." >&2
+  fi
+  exit $EXIT_REBASE_CONFIRM
+fi
+
 # =======================
 # INITIALIZATION FEATURE (--start)
 # =======================

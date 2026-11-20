@@ -97,6 +97,8 @@ A preference aborts and retries the rebase against the commit already fetched. F
 
 The same conflict choices apply to normal sync (`gog` or `gog -s`). After a successful local or remote preference, `gog` exits `17` without pushing and prints commands to review the rebased changes and push manually. A normal conflict-free sync still pushes automatically.
 
+If a previous run already left a rebase paused, rerunning `gog` reports that state instead of an ordinary detached-HEAD error. Resolve and continue the rebase manually, or run `git rebase --abort` followed by `gog -p` to retry with the conflict choices. Aborting keeps the original local commit but discards any conflict-resolution edits made after the rebase stopped.
+
 ### New Project Initialization
 
 To completely set up a brand-new local directory and sync it to GitHub instantly:
@@ -268,10 +270,10 @@ gog --verbose
 | `0` | Success (commit and/or sync completed, pull completed, a successful `--attach` with nothing to commit, or `--help`/`--version`) |
 | `1` | Usage or environment error: unknown or invalid option, option combination not allowed, not a Git repository, `--attach` validation, branch-detection, or checkout failure, nested repository for `--start`, missing `gh`, Bash older than 4.4, missing `timeout` |
 | `10` | Nothing to commit locally (use `--sync` to run the sync phase anyway) |
-| `11` | Detached HEAD |
+| `11` | Detached HEAD with no rebase in progress |
 | `12` | Blocked branch (use `-s` to bypass) |
 | `13` | Remote/network error (unreachable origin, failed `gh repo create`, failed push, or a `pull --rebase` failure that isn't an actual conflict) |
-| `14` | Pull conflict left for manual resolution or still unresolved — resolve the unmerged files; run `git rebase --continue` if a rebase is in progress, or check `git stash list` if applying the autostash conflicted |
+| `14` | Pull conflict left for manual resolution, still unresolved, or a rebase already in progress — resolve the unmerged files; run `git rebase --continue` if a rebase is in progress, or check `git stash list` if applying the autostash conflicted |
 | `15` | Local Git operation failed (`git add -A`, `git commit`, or untracking an ignored file) |
 | `16` | Ignored tracked-file cleanup declined or not confirmed (including EOF/non-interactive input) |
 | `17` | Rebase completed with a local or remote preference during sync; review the result and push manually |
